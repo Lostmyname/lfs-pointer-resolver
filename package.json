@@ -1,8 +1,8 @@
 {
-  "name": "s3-lambda-process",
+  "name": "lfs-pointer-resolver",
   "version": "1.0.0",
   "main": "dist/index.js",
-  "repository": "https://github.com/Lostmyname/s3-lambda-process",
+  "repository": "https://github.com/Lostmyname/lfs-pointer-resolver",
   "author": "Stephen Fulljames <stephen@fulljames.net>",
   "license": "MIT",
   "dependencies": {

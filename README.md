@@ -54,7 +54,7 @@ Usually 72
 ## Example usage
 
 ```
-uses: Lostmyname/s3-lambda-process@v2
+uses: Lostmyname/lfs-pointer-resolver@v2
   with:
     MUSE_PRODUCT_SLUG: 'my-product-slug/commit_sha'
     AWS_S3_BUCKET: 'my-s3-bucket'
