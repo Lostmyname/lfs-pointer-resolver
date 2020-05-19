@@ -15,35 +15,35 @@ full checkout of LFS resources can be skipped.
 
 ## Inputs
 
-### `MUSE_PRODUCT_SLUG`
+### `muse_product_slug`
 
-The product slug to use as a subdirectory when uploading processed
-files to their destination
+**REQUIRED** The product slug to use as a subdirectory when uploading processed
+files to their destination.
 
-### `AWS_S3_BUCKET`
+### `aws_s3_bucket`
 
-S3 bucket for destination images
+**REQUIRED** S3 bucket for destination images.
 
-### `LAMBDA_TARGET`
+### `lambda_target`
 
 The Lambda function to be invoked.
 
-### `REPOSITORY`
+### `repository`
 
-The current repository, used for LFS authentication. Use the
+**REQUIRED** The current repository, used for LFS authentication. Use the
 `github.repository` context value.
 
-### `LFS_DISCOVERY_ENDPOINT`
+### `lfs_discovery_endpoint`
 
-Git LFS API path for image discovery
+**REQUIRED** Git LFS API path for image discovery
 
-### `PRINT_IMAGE_DPI`
+### `print_image_dpi`
 
-Usually 300
+Default 300
 
-### `PREVIEW_IMAGE_DPI`
+### `preview_image_dpi`
 
-Usually 72
+Default 72
 
 ## Env
 
@@ -54,15 +54,15 @@ Usually 72
 ## Example usage
 
 ```
-uses: Lostmyname/lfs-pointer-resolver@v2
+uses: Lostmyname/lfs-pointer-resolver@v3
   with:
-    MUSE_PRODUCT_SLUG: 'my-product-slug/commit_sha'
-    AWS_S3_BUCKET: 'my-s3-bucket'
-    LAMBDA_TARGET: 'my-lambda-function'
-    REPOSITORY: ${{ github.repository }}
-    LFS_DISCOVERY_ENDPOINT: 'https://github.com/foo/bar.git/info/lfs/objects/batch'
-    PRINT_IMAGE_DPI: 300
-    PREVIEW_IMAGE_DPI: 72
+    muse_product_slug: 'my-product-slug/commit_sha'
+    aws_s3_bucket: 'my-s3-bucket'
+    lambda_target: 'my-lambda-function'
+    repository: ${{ github.repository }}
+    lfs_discovery_endpoint: 'https://github.com/foo/bar.git/info/lfs/objects/batch'
+    print_image_dpi: 300
+    preview_image_dpi: 72
   env:
     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
