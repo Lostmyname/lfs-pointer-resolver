@@ -3,28 +3,28 @@ description: 'Takes a set of Git LFS pointer files, resolves their original URL 
 runs:
   using: 'node12'
   main: 'dist/index.js'
-  inputs:
-    muse_product_slug:
-      description: 'Product slug path to use for image uploads, may include a commit SHA for versioning'
-      required: true
-    aws_s3_bucket:
-      description: 'Target bucket for image uploads'
-      required: true
-    lambda_target:
-      description: 'The AWS Lambda function to invoke for each image pointer'
-      required: false
-      default: 'muse-create-preview-lfs'
-    repository:
-      description: 'The Github repository where the Action is running'
-      required: true
-    lfs_discovery_endpoint:
-      description: 'Git LFS API path for image discovery'
-      required: true
-    print_image_dpi:
-      description: 'Pixel resolution of a print image'
-      required: false
-      default: 300
-    preview_image_dpi:
-      description: 'Pixel resolution of a preview image'
-      required: false
-      default: 72
+inputs:
+  muse_product_slug:
+    description: 'Product slug path to use for image uploads, may include a commit SHA for versioning'
+    required: true
+  aws_s3_bucket:
+    description: 'Target bucket for image uploads'
+    required: true
+  lambda_target:
+    description: 'The AWS Lambda function to invoke for each image pointer'
+    required: false
+    default: 'muse-create-preview-lfs'
+  repository:
+    description: 'The Github repository where the Action is running'
+    required: true
+  lfs_discovery_endpoint:
+    description: 'Git LFS API path for image discovery'
+    required: true
+  print_image_dpi:
+    description: 'Pixel resolution of a print image'
+    required: false
+    default: 300
+  preview_image_dpi:
+    description: 'Pixel resolution of a preview image'
+    required: false
+    default: 72
