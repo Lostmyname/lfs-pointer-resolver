@@ -12,6 +12,9 @@
     "aws-sdk": "^2.662.0",
     "fs-extra": "^9.0.0",
     "glob": "^7.1.6",
+    "lodash.chunk": "^4.2.0",
+    "lodash.flatten": "^4.4.0",
+    "lodash.zipwith": "^4.2.0",
     "mime-types": "^2.1.27",
     "node-fetch": "^2.6.0"
   }
