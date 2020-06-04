@@ -21,7 +21,7 @@ const PRINT_IMAGE_DPI = parseInt(core.getInput('PRINT_IMAGE_DPI'));
 const PREVIEW_IMAGE_DPI = parseInt(core.getInput('PREVIEW_IMAGE_DPI'));
 
 const REPOSITORY = core.getInput('REPOSITORY');
-const STATIC_DIR = './static-assets/images'; // send as config?
+const SOURCE_DIR = core.getInput('SOURCE_DIR');
 
 const LFS_ENDPOINT = core.getInput('LFS_DISCOVERY_ENDPOINT')
 const LFS_TEMPLATE = {
@@ -40,7 +40,7 @@ const readFile = util.promisify(fs.readFile);
 
 const getImages = () => {
   return glob
-    .sync(`${STATIC_DIR}/**/*`, {nodir: true})
+    .sync(`${SOURCE_DIR}/**/*`, {nodir: true})
     .reduce((acc, file) => {
       const mt = mimeTypes.lookup(file) || '';
       if (mt.startsWith('image/') && !mt.includes('svg')) {

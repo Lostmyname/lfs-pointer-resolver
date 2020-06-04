@@ -37,6 +37,10 @@ The Lambda function to be invoked.
 
 **REQUIRED** Git LFS API path for image discovery
 
+### `source_dir`
+
+Project directory where source images are located. Default `./static-assets/images`
+
 ### `print_image_dpi`
 
 Default 300
