@@ -40,7 +40,7 @@ const readFile = util.promisify(fs.readFile);
 
 const getImages = () => {
   return glob
-    .sync(`./${SOURCE_DIR}/**/*`, {nodir: true})
+    .sync(`./${SOURCE_DIR}/images/**/*`, {nodir: true})
     .reduce((acc, file) => {
       const mt = mimeTypes.lookup(file) || '';
       if (mt.startsWith('image/') && !mt.includes('svg')) {
