@@ -20,6 +20,10 @@ inputs:
   lfs_discovery_endpoint:
     description: 'Git LFS API path for image discovery'
     required: true
+  source_dir:
+    description: 'Project directory where source images are located'
+    required: false
+    default: './static-assets/images'
   print_image_dpi:
     description: 'Pixel resolution of a print image'
     required: false
