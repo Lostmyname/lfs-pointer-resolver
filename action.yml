@@ -21,9 +21,9 @@ inputs:
     description: 'Git LFS API path for image discovery'
     required: true
   source_dir:
-    description: 'Project directory where source images are located'
+    description: 'Project directory where source images are located. Internally the resolver looks within this for an `images` folder'
     required: false
-    default: './static-assets/images'
+    default: 'static-assets'
   print_image_dpi:
     description: 'Pixel resolution of a print image'
     required: false

@@ -40,7 +40,7 @@ const readFile = util.promisify(fs.readFile);
 
 const getImages = () => {
   return glob
-    .sync(`${SOURCE_DIR}/**/*`, {nodir: true})
+    .sync(`./${SOURCE_DIR}/**/*`, {nodir: true})
     .reduce((acc, file) => {
       const mt = mimeTypes.lookup(file) || '';
       if (mt.startsWith('image/') && !mt.includes('svg')) {
@@ -70,7 +70,7 @@ const processPointer = async (path) => {
 
   const oid = file[1].split(':')[1];
   const size = parseInt(file[2].split(' ')[1]);
-  const fileName = path.split('static-assets/')[1];
+  const fileName = path.split(`${SOURCE_DIR}/`)[1];
 
   return {
     fileName,

@@ -39,7 +39,8 @@ The Lambda function to be invoked.
 
 ### `source_dir`
 
-Project directory where source images are located. Default `./static-assets/images`
+Project directory where source images are located. Default `static-assets`.
+Internally the resolver looks within this for an `images` folder.
 
 ### `print_image_dpi`
 
