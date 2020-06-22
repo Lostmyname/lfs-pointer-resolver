@@ -152,9 +152,17 @@ const processImage = async (opts) => {
   }
 
   const result = await invoke(opts).then(res => {
+    // Lambda will return a 200 even if it errors but we can check for the FunctionError property in the response and then interrogate the payload for details
+    if (res.FunctionError) {
+      const errorPayload = JSON.parse(res.Payload);
+
+      throw new Error(errorPayload.errorMessage);
+    }
     console.log(`Completed ${opts.destinations.map(x => x.key).join(', ')}`)
     return res.Payload;
-  }).catch(err => console.log(err));
+  }).catch(err => {
+    throw new Error(err);
+  });
 
   return result;
 };
