@@ -153,6 +153,7 @@ const processImage = async (opts) => {
 
   const result = await invoke(opts).then(res => {
     // Lambda will return a 200 even if it errors but we can check for the FunctionError property in the response and then interrogate the payload for details
+    console.log(res);
     if (res.FunctionError) {
       const errorPayload = JSON.parse(res.Payload);
 
