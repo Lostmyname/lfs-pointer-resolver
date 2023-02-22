@@ -73,3 +73,11 @@ uses: Lostmyname/lfs-pointer-resolver@v3
     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     AWS_REGION: 'eu-west-1'
 ```
+
+## Build process
+
+It is recommended that a Github Action is pre-compiled with it's dependencies
+and `node_modules` is not checked in.
+
+Follow [Github's instructions](https://docs.github.com/en/actions/creating-actions/creating-a-javascript-action#commit-tag-and-push-your-action-to-github) on building and pushing
+new versions of this Action using `@vercel/ncc` as a build tool.
