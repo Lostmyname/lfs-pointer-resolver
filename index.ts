@@ -1,16 +1,20 @@
-const { exec } = require('child_process');
+import { exec } from 'child_process';
 
-const async = require('async');
-const AWS = require('aws-sdk');
-const core = require('@actions/core');
-const chunk = require('lodash.chunk');
-// const fetch = require('node-fetch');
-const flatten = require('lodash.flatten');
-const fs = require('fs-extra');
-const glob = require('glob');
-const mimeTypes = require('mime-types');
-const zipwith = require('lodash.zipwith');
-const util = require('util');
+import * as core from '@actions/core';
+import async from 'async';
+import * as AWS from 'aws-sdk';
+import fs from 'fs-extra';
+import glob from 'glob';
+import { chunk, flatten, zipWith } from 'lodash';
+import mimeTypes from 'mime-types';
+import { promisify } from 'util';
+
+type Asset = {
+  fileName: string;
+  opts: {
+    oid: string;
+  };
+};
 
 const lambda = new AWS.Lambda();
 
@@ -36,7 +40,7 @@ let LFS_HEADERS = {
   'Authorization': null,
 };
 
-const readFile = util.promisify(fs.readFile);
+const readFile = promisify(fs.readFile);
 
 const getImages = () => {
   return glob
@@ -108,8 +112,9 @@ const resolvePointers = async (assets) => {
     }).then(data => {
       return data.objects.map(x => x.actions.download.href);
     });
+
     // stitch resolved pointer URL and original data back together
-    return zipwith(response, assets, (url, asset) => {
+    return zipWith(response, assets, (url: string, asset: Asset) => {
       if (url.indexOf(asset.opts.oid) === -1) {
         throw new Error(`Mismatch between pointer oid and resolved url for ${asset.fileName}`);
       };
@@ -154,7 +159,7 @@ const processImage = async (opts) => {
   const result = await invoke(opts).then(res => {
     // Lambda will return a 200 even if it errors but we can check for the FunctionError property in the response and then interrogate the payload for details
     if (res.FunctionError) {
-      const errorPayload = JSON.parse(res.Payload);
+      const errorPayload = JSON.parse(res.Payload as string);
 
       throw new Error(errorPayload.errorMessage);
     }
