@@ -1,18 +1,29 @@
-const { exec } = require('child_process');
+import { exec } from 'child_process';
 
-const async = require('async');
-const AWS = require('aws-sdk');
-const core = require('@actions/core');
-const chunk = require('lodash.chunk');
-const fetch = require('node-fetch');
-const flatten = require('lodash.flatten');
-const fs = require('fs-extra');
-const glob = require('glob');
-const mimeTypes = require('mime-types');
-const zipwith = require('lodash.zipwith');
-const util = require('util');
+import * as core from '@actions/core';
+import async from 'async';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import fs from 'fs-extra';
+import glob from 'glob';
+import { chunk, flatten, zipWith } from 'lodash';
+import mimeTypes from 'mime-types';
 
-const lambda = new AWS.Lambda();
+type Asset = {
+  fileName: string;
+  opts: {
+    oid: string;
+  };
+};
+
+type InvocationOptions = {
+  destinations: {
+    key: string
+  }[];
+};
+
+const lambda = new LambdaClient({
+  region: 'eu-west-1',
+});
 
 const MUSE_PRODUCT_SLUG = core.getInput('MUSE_PRODUCT_SLUG');
 const MUSE_S3_BUCKET = core.getInput('AWS_S3_BUCKET');
@@ -36,9 +47,7 @@ let LFS_HEADERS = {
   'Authorization': null,
 };
 
-const readFile = util.promisify(fs.readFile);
-
-const getImages = () => {
+const getImages = (): string[] => {
   return glob
     .sync(`./${SOURCE_DIR}/images/**/*`, {nodir: true})
     .reduce((acc, file) => {
@@ -50,23 +59,23 @@ const getImages = () => {
     }, []);
 }
 
-const getAuth = () => {
+const getAuth = (): Promise<string> => {
   const cmd = `ssh git@github.com git-lfs-authenticate ${REPOSITORY} download`; // config
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     exec(cmd, (err, stdout, stderr) => {
       resolve(stdout ? JSON.parse(stdout).header.Authorization : stderr);
     });
   });
 }
 
-const createKey = (mode, fileName) => {
+const createKey = (mode: string, fileName: string) => {
   return `${MUSE_PRODUCT_SLUG}/${mode}/${fileName}`;
 }
 
 // read an LFS pointer file and parse it's oid and size
 // return with the file name because we need to map this with the resolved url later
-const processPointer = async (path) => {
-  const file = await readFile(path, 'utf8').then(body => body.split(/\n/));
+const processPointer = async (path: string) => {
+  const file = await fs.readFile(path, 'utf8').then(body => body.split(/\n/));
 
   const oid = file[1].split(':')[1];
   const size = parseInt(file[2].split(' ')[1]);
@@ -83,7 +92,7 @@ const processPointer = async (path) => {
 }
 
 // take a batch of pointer data, resolve urls, and create onward data for Lambda
-const resolvePointers = async (assets) => {
+const resolvePointers = async (assets: Asset[]) => {
   console.log(`Resolving ${assets.length} pointers`);
 
   const data = JSON.parse(JSON.stringify(LFS_TEMPLATE));
@@ -106,10 +115,17 @@ const resolvePointers = async (assets) => {
 
       return res.json();
     }).then(data => {
-      return data.objects.map(x => x.actions.download.href);
+      return data.objects.map((x: {
+        actions: {
+          download: {
+            href: string;
+          }
+        }
+      }) => x.actions.download.href);
     });
+
     // stitch resolved pointer URL and original data back together
-    return zipwith(response, assets, (url, asset) => {
+    return zipWith(response, assets, (url: string, asset: Asset) => {
       if (url.indexOf(asset.opts.oid) === -1) {
         throw new Error(`Mismatch between pointer oid and resolved url for ${asset.fileName}`);
       };
@@ -140,31 +156,32 @@ const resolvePointers = async (assets) => {
   }
 }
 
-const processImage = async (opts) => {
+const processImage = async (opts: InvocationOptions) => {
   const LAMBDA_TARGET = core.getInput('LAMBDA_TARGET');
+  const params = new TextEncoder().encode(JSON.stringify(opts));
 
-  const invoke = (opts) => {
-    return lambda.invoke({
-      FunctionName: LAMBDA_TARGET,
-      InvocationType: 'RequestResponse',
-      Payload: JSON.stringify(opts),
-    }).promise();
-  }
-
-  const result = await invoke(opts).then(res => {
-    // Lambda will return a 200 even if it errors but we can check for the FunctionError property in the response and then interrogate the payload for details
-    if (res.FunctionError) {
-      const errorPayload = JSON.parse(res.Payload);
-
-      throw new Error(errorPayload.errorMessage);
-    }
-    console.log(`Completed ${opts.destinations.map(x => x.key).join(', ')}`)
-    return res.Payload;
-  }).catch(err => {
-    throw new Error(err);
+  const command = new InvokeCommand({
+    FunctionName: LAMBDA_TARGET,
+    InvocationType: 'RequestResponse',
+    Payload: params,
   });
 
-  return result;
+  try {
+    const { Payload, LogResult, FunctionError } = await lambda.send(command);
+    const result = new TextDecoder().decode(Payload);
+
+    console.log({ result, LogResult, FunctionError });
+    // Lambda will return a 200 even if it errors but we can check for the FunctionError property in the response and then interrogate the payload for details
+    if (FunctionError) {
+      throw new Error(result);
+    }
+
+    console.log(`Completed ${opts.destinations.map(x => x.key).join(', ')}`)
+    return result;
+
+  } catch (err) {
+    throw new Error(err);
+  }
 };
 
 const main = async () => {

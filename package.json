@@ -5,17 +5,28 @@
   "repository": "https://github.com/Lostmyname/lfs-pointer-resolver",
   "author": "Stephen Fulljames <stephen@fulljames.net>",
   "license": "MIT",
+  "scripts": {
+    "build": "ncc build index.ts"
+  },
   "dependencies": {
-    "@actions/core": "^1.2.6",
+    "@actions/core": "^1.9.1",
     "@actions/github": "^2.1.1",
+    "@aws-sdk/client-lambda": "^3.276.0",
     "async": "^3.2.0",
-    "aws-sdk": "^2.662.0",
     "fs-extra": "^9.0.0",
     "glob": "^7.1.6",
-    "lodash.chunk": "^4.2.0",
-    "lodash.flatten": "^4.4.0",
-    "lodash.zipwith": "^4.2.0",
+    "lodash": "^4.17.21",
     "mime-types": "^2.1.27",
     "node-fetch": "^2.6.1"
+  },
+  "devDependencies": {
+    "@types/async": "^3.2.18",
+    "@types/fs-extra": "^11.0.1",
+    "@types/glob": "^8.0.1",
+    "@types/jest": "^29.4.0",
+    "@types/lodash": "^4.14.191",
+    "@types/mime-types": "^2.1.1",
+    "@types/node": "^18.14.0",
+    "typescript": "^4.9.5"
   }
 }
