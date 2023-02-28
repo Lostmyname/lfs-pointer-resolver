@@ -5,7 +5,7 @@ import async from 'async';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import fs from 'fs-extra';
 import glob from 'glob';
-import { chunk, flatten, zipWith } from 'lodash';
+import { chunk, zipWith } from 'lodash';
 import mimeTypes from 'mime-types';
 
 type Asset = {
@@ -16,6 +16,9 @@ type Asset = {
 };
 
 type InvocationOptions = {
+  source: {
+    url: string;
+  },
   destinations: {
     key: string
   }[];
@@ -93,8 +96,6 @@ const processPointer = async (path: string) => {
 
 // take a batch of pointer data, resolve urls, and create onward data for Lambda
 const resolvePointers = async (assets: Asset[]) => {
-  console.log(`Resolving ${assets.length} pointers`);
-
   const data = JSON.parse(JSON.stringify(LFS_TEMPLATE));
   data.objects = assets.map(x => x.opts);
 
@@ -167,11 +168,12 @@ const processImage = async (opts: InvocationOptions) => {
   });
 
   try {
-    const { Payload, LogResult, FunctionError } = await lambda.send(command);
+    const { Payload, FunctionError } = await lambda.send(command);
     const result = new TextDecoder().decode(Payload);
 
-    console.log({ result, LogResult, FunctionError });
-    // Lambda will return a 200 even if it errors but we can check for the FunctionError property in the response and then interrogate the payload for details
+    // Lambda will return a 200 even if it errors but we can check for the
+    // FunctionError property in the response and then interrogate the payload
+    // for details
     if (FunctionError) {
       throw new Error(result);
     }
@@ -184,6 +186,20 @@ const processImage = async (opts: InvocationOptions) => {
   }
 };
 
+const resolveAndProcess = async (assets: Asset[], i: number, next: () => void) => {
+  // max Lambda concurrency
+  const lambdaConcurrency = 1000;
+
+  console.log(`resolve and process batch ${i+1} for ${assets.length} pointers`);
+
+  const sourceUrls = await resolvePointers(assets);
+
+  // invoke the lambda processor at max concurrency
+  await async.eachLimit(sourceUrls, lambdaConcurrency, processImage);
+
+  next();
+}
+
 const main = async () => {
   console.time('Process time');
 
@@ -195,20 +211,12 @@ const main = async () => {
   const files = getImages();
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
-  // concurrency is a bit of guesswork here to keep the Github API happy
-  const resolverConcurrency = 10;
-  // max Lambda concurrency
-  const lambdaConcurrency = 1000;
 
   try {
     // iterate over LFS pointer files and get source URL from oid
     const pointerData = await Promise.all(files.map(x => processPointer(x))).then(res => chunk(res, resolverChunkSize));
 
-    // resolve URLs in batches - concurrency is a bit of guesswork here to keep the Github API happy
-    const sourceUrls = await async.mapLimit(pointerData, resolverConcurrency, resolvePointers);
-
-    // invoke the lambda processor at max concurrency
-    await async.eachLimit(flatten(sourceUrls), lambdaConcurrency, processImage);
+    await async.eachOfSeries(pointerData, resolveAndProcess);
 
     console.log(`Processed ${files.length} files`);
   } catch(error) {
