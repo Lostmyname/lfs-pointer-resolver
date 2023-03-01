@@ -4,6 +4,7 @@ import * as core from '@actions/core';
 import async from 'async';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import fs from 'fs-extra';
+import fetch from 'node-fetch';
 import glob from 'glob';
 import { chunk, zipWith } from 'lodash';
 import mimeTypes from 'mime-types';
@@ -23,6 +24,14 @@ type InvocationOptions = {
     key: string
   }[];
 };
+
+type ResolvedFile = {
+  actions: {
+    download: {
+      href: string;
+    }
+  }
+}
 
 const lambda = new LambdaClient({
   region: 'eu-west-1',
@@ -107,7 +116,6 @@ const resolvePointers = async (assets: Asset[]) => {
     const response = await fetch(LFS_ENDPOINT, {
       method: 'POST',
       headers: LFS_HEADERS,
-      credentials: 'include',
       body: JSON.stringify(data),
     }).then(res => {
       if (!res.ok) {
@@ -115,14 +123,10 @@ const resolvePointers = async (assets: Asset[]) => {
       }
 
       return res.json();
-    }).then(data => {
-      return data.objects.map((x: {
-        actions: {
-          download: {
-            href: string;
-          }
-        }
-      }) => x.actions.download.href);
+    }).then((data: {
+      objects: ResolvedFile[]
+    }) => {
+      return data.objects.map((x) => x.actions.download.href);
     });
 
     // stitch resolved pointer URL and original data back together
