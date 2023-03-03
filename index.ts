@@ -6,7 +6,6 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import fs from 'fs-extra';
 import fetch from 'node-fetch';
 import glob from 'glob';
-import { zipWith } from 'lodash';
 import mimeTypes from 'mime-types';
 
 type Asset = {
@@ -47,6 +46,8 @@ const REPOSITORY = core.getInput('REPOSITORY');
 const SOURCE_DIR = core.getInput('SOURCE_DIR');
 
 const LFS_ENDPOINT = core.getInput('LFS_DISCOVERY_ENDPOINT')
+const LAMBDA_TARGET = core.getInput('LAMBDA_TARGET');
+
 const LFS_TEMPLATE = {
   "operation": "download",
   "transfers": [ "basic "],
@@ -104,9 +105,9 @@ const processPointer = async (path: string) => {
 }
 
 // take a batch of pointer data, resolve urls, and create onward data for Lambda
-const resolvePointers = async (assets: Asset[]) => {
+const resolveAndProcess = async (asset: Asset, next: (err?: Error) => void) => {
   const data = JSON.parse(JSON.stringify(LFS_TEMPLATE));
-  data.objects = assets.map(x => x.opts);
+  data.objects = [asset.opts];
 
   if (LFS_HEADERS.Authorization === null) {
     throw new Error('No auth token present');
@@ -126,52 +127,43 @@ const resolvePointers = async (assets: Asset[]) => {
     }).then((data: {
       objects: ResolvedFile[]
     }) => {
-      return data.objects.map((x) => x.actions.download.href);
+      return data.objects[0].actions.download.href;
     });
+
+    if (response.indexOf(asset.opts.oid) === -1) {
+      throw new Error(`Mismatch between pointer oid and resolved url for ${asset.fileName}`);
+    };
 
     // stitch resolved pointer URL and original data back together
-    return zipWith(response, assets, (url: string, asset: Asset) => {
-      if (url.indexOf(asset.opts.oid) === -1) {
-        throw new Error(`Mismatch between pointer oid and resolved url for ${asset.fileName}`);
-      };
+    const printDestination = {
+      type: 's3',
+      bucket: MUSE_S3_BUCKET,
+      key: createKey('print', asset.fileName),
+      scale: 1,
+    }
 
-      const printDestination = {
-        type: 's3',
-        bucket: MUSE_S3_BUCKET,
-        key: createKey('print', asset.fileName),
-        scale: 1,
-      }
+    const previewDestination = {
+      type: 's3',
+      bucket: MUSE_S3_BUCKET,
+      key: createKey('preview', asset.fileName),
+      scale: PREVIEW_IMAGE_DPI / PRINT_IMAGE_DPI,
+    }
 
-      const previewDestination = {
-        type: 's3',
-        bucket: MUSE_S3_BUCKET,
-        key: createKey('preview', asset.fileName),
-        scale: PREVIEW_IMAGE_DPI / PRINT_IMAGE_DPI,
-      }
+    const opts: InvocationOptions = {
+      source: {
+        url: response,
+      },
+      destinations: [printDestination, previewDestination]
+    }
 
-      return {
-        source: {
-          url,
-        },
-        destinations: [printDestination, previewDestination]
-      }
+    const params = new TextEncoder().encode(JSON.stringify(opts));
+
+    const command = new InvokeCommand({
+      FunctionName: LAMBDA_TARGET,
+      InvocationType: 'RequestResponse',
+      Payload: params,
     });
-  } catch(error) {
-    throw new Error(error);
-  }
-}
 
-const processImage = async (opts: InvocationOptions) => {
-  const LAMBDA_TARGET = core.getInput('LAMBDA_TARGET');
-  const params = new TextEncoder().encode(JSON.stringify(opts));
-
-  const command = new InvokeCommand({
-    FunctionName: LAMBDA_TARGET,
-    InvocationType: 'RequestResponse',
-    Payload: params,
-  });
-
-  try {
     const { Payload, FunctionError } = await lambda.send(command);
     const result = new TextDecoder().decode(Payload);
 
@@ -183,19 +175,11 @@ const processImage = async (opts: InvocationOptions) => {
     }
 
     console.log(`Completed ${opts.destinations.map(x => x.key).join(', ')}`)
-    return result;
 
-  } catch (err) {
-    throw new Error(err);
+    next(null);
+  } catch(error) {
+    throw new Error(error);
   }
-};
-
-const resolveAndProcess = async (asset: Asset, next: (err?: Error) => void) => {
-  const sourceUrls = await resolvePointers([asset]);
-
-  await async.eachSeries(sourceUrls, processImage);
-
-  next(null);
 }
 
 const main = async () => {
