@@ -71561,14 +71561,10 @@ const processImage = (opts) => __awaiter(void 0, void 0, void 0, function* () {
         throw new Error(err);
     }
 });
-const resolveAndProcess = (assets, i, next) => __awaiter(void 0, void 0, void 0, function* () {
-    // max Lambda concurrency
-    const lambdaConcurrency = 1000;
-    console.log(`resolve and process batch ${i + 1} for ${assets.length} pointers`);
-    const sourceUrls = yield resolvePointers(assets);
-    // invoke the lambda processor at max concurrency
-    yield async_default().eachLimit(sourceUrls, lambdaConcurrency, processImage);
-    next();
+const resolveAndProcess = (asset, next) => __awaiter(void 0, void 0, void 0, function* () {
+    const sourceUrls = yield resolvePointers([asset]);
+    yield async_default().eachSeries(sourceUrls, processImage);
+    next(null);
 });
 const main = () => __awaiter(void 0, void 0, void 0, function* () {
     console.time('Process time');
@@ -71578,13 +71574,13 @@ const main = () => __awaiter(void 0, void 0, void 0, function* () {
     // collect files to process
     const files = getImages();
     // chunk size of URLs to resolve in batches via the Github API
-    const resolverChunkSize = 50;
+    const resolverConcurrency = 10;
     console.log(`${files.length} files to process`);
     try {
         // iterate over LFS pointer files and get source URL from oid
-        const pointerData = yield Promise.all(files.map(x => processPointer(x))).then(res => (0,lodash.chunk)(res, resolverChunkSize));
+        const pointerData = yield Promise.all(files.map(x => processPointer(x)));
         yield new Promise((resolve) => {
-            async_default().eachOfSeries(pointerData, resolveAndProcess, (err) => {
+            async_default().eachLimit(pointerData, resolverConcurrency, resolveAndProcess, (err) => {
                 if (err) {
                     throw new Error(err.message);
                 }

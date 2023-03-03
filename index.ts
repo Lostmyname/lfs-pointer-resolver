@@ -6,7 +6,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import fs from 'fs-extra';
 import fetch from 'node-fetch';
 import glob from 'glob';
-import { chunk, zipWith } from 'lodash';
+import { zipWith } from 'lodash';
 import mimeTypes from 'mime-types';
 
 type Asset = {
@@ -190,18 +190,12 @@ const processImage = async (opts: InvocationOptions) => {
   }
 };
 
-const resolveAndProcess = async (assets: Asset[], i: number, next: () => void) => {
-  // max Lambda concurrency
-  const lambdaConcurrency = 1000;
+const resolveAndProcess = async (asset: Asset, next: (err?: Error) => void) => {
+  const sourceUrls = await resolvePointers([asset]);
 
-  console.log(`resolve and process batch ${i+1} for ${assets.length} pointers`);
+  await async.eachSeries(sourceUrls, processImage);
 
-  const sourceUrls = await resolvePointers(assets);
-
-  // invoke the lambda processor at max concurrency
-  await async.eachLimit(sourceUrls, lambdaConcurrency, processImage);
-
-  next();
+  next(null);
 }
 
 const main = async () => {
@@ -214,16 +208,16 @@ const main = async () => {
   // collect files to process
   const files = getImages();
   // chunk size of URLs to resolve in batches via the Github API
-  const resolverChunkSize = 50;
+  const resolverConcurrency = 10;
 
   console.log(`${files.length} files to process`);
 
   try {
     // iterate over LFS pointer files and get source URL from oid
-    const pointerData = await Promise.all(files.map(x => processPointer(x))).then(res => chunk(res, resolverChunkSize));
+    const pointerData = await Promise.all(files.map(x => processPointer(x)));
 
     await new Promise((resolve: any) => {
-      async.eachOfSeries(pointerData, resolveAndProcess, (err) => {
+      async.eachLimit(pointerData, resolverConcurrency, resolveAndProcess, (err) => {
         if (err) {
           throw new Error(err.message);
         }
@@ -234,6 +228,7 @@ const main = async () => {
     });
 
     console.log(`Processed ${files.length} files`);
+
   } catch(error) {
     core.setFailed(error);
   };
