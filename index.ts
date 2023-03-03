@@ -216,11 +216,22 @@ const main = async () => {
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
 
+  console.log(`${files.length} files to process`);
+
   try {
     // iterate over LFS pointer files and get source URL from oid
     const pointerData = await Promise.all(files.map(x => processPointer(x))).then(res => chunk(res, resolverChunkSize));
 
-    await async.eachOfSeries(pointerData, resolveAndProcess);
+    await new Promise((resolve: any) => {
+      async.eachOfSeries(pointerData, resolveAndProcess, (err) => {
+        if (err) {
+          throw new Error(err.message);
+        }
+
+        console.log('Completed batch processing');
+        resolve();
+      });
+    });
 
     console.log(`Processed ${files.length} files`);
   } catch(error) {

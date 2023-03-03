@@ -71579,10 +71579,19 @@ const main = () => __awaiter(void 0, void 0, void 0, function* () {
     const files = getImages();
     // chunk size of URLs to resolve in batches via the Github API
     const resolverChunkSize = 50;
+    console.log(`${files.length} files to process`);
     try {
         // iterate over LFS pointer files and get source URL from oid
         const pointerData = yield Promise.all(files.map(x => processPointer(x))).then(res => (0,lodash.chunk)(res, resolverChunkSize));
-        yield async_default().eachOfSeries(pointerData, resolveAndProcess);
+        yield new Promise((resolve) => {
+            async_default().eachOfSeries(pointerData, resolveAndProcess, (err) => {
+                if (err) {
+                    throw new Error(err.message);
+                }
+                console.log('Completed batch processing');
+                resolve();
+            });
+        });
         console.log(`Processed ${files.length} files`);
     }
     catch (error) {
