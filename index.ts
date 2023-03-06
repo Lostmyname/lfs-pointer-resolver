@@ -196,6 +196,8 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
       });
     });
 
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
     next(null);
   } catch(error) {
     throw new Error(error);

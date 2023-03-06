@@ -71562,6 +71562,7 @@ const resolveAndProcess = (assets, i, next) => __awaiter(void 0, void 0, void 0,
                 resolve();
             });
         });
+        yield new Promise(resolve => setTimeout(resolve, 3000));
         next(null);
     }
     catch (error) {
