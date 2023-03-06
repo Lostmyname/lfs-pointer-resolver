@@ -4,7 +4,8 @@ import * as core from '@actions/core';
 import async from 'async';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import fs from 'fs-extra';
-import fetch from 'node-fetch';
+import axios from 'axios';
+import axiosRetry from 'axios-retry';
 import glob from 'glob';
 import { chunk, zipWith } from 'lodash';
 import mimeTypes from 'mime-types';
@@ -107,32 +108,45 @@ const processPointer = async (path: string) => {
 
 // take a batch of pointer data, resolve urls, and create onward data for Lambda
 const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error) => void) => {
-  console.log(`resolve and process batch ${i+1} for ${assets.length} pointers`);
+  console.log(`Resolve and process batch ${i+1} for ${assets.length} pointers`);
 
   const lambdaConcurrency = 1000;
   const data = JSON.parse(JSON.stringify(LFS_TEMPLATE));
   data.objects = assets.map(x => x.opts);
 
+  // fetch an auth token and apply to header template
+  // do this each time because the token has a 600 second TTL
+  // and will otherwise expire on a long build
+  const token = await getAuth();
+  LFS_HEADERS.Authorization = token;
+
   if (LFS_HEADERS.Authorization === null) {
     throw new Error('No auth token present');
   }
 
-  try {
-    const response = await fetch(LFS_ENDPOINT, {
-      method: 'POST',
-      headers: LFS_HEADERS,
-      body: JSON.stringify(data),
-    }).then(res => {
-      if (!res.ok) {
-        throw new Error(`Could not fetch`);
-      }
+  axiosRetry(axios, {
+    retries: 3,
+    onRetry: (retryCount, error) => {
+      console.log(`retrying ${retryCount}`);
+      // console.log(error.toJSON());
+    }
+  });
 
-      return res.json();
-    }).then((data: {
-      objects: ResolvedFile[]
-    }) => {
-      return data.objects.map((x) => x.actions.download.href);
+  const response = await axios.post(
+    LFS_ENDPOINT,
+    data,
+    {
+      headers: LFS_HEADERS,
+    }).then(res => {
+      const { objects }: { objects: ResolvedFile[] } = res.data;
+      return objects.map((x) => x.actions.download.href);
     });
+
+  if (!response) {
+    throw new Error('No response from resolver API');
+  }
+
+  try {
 
     // stitch resolved pointer URL and original data back together
     const sourceUrls = zipWith(response, assets, (url: string, asset: Asset): InvocationOptions => {
@@ -167,23 +181,36 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
       async.eachLimit(sourceUrls, lambdaConcurrency, async (opts: InvocationOptions, next: (err?: Error) => void) => {
         const params = new TextEncoder().encode(JSON.stringify(opts));
 
+        const invokeLambdaFunction = async (command: InvokeCommand) => {
+          const { Payload, FunctionError } = await lambda.send(command);
+          const DecodedPayload = new TextDecoder().decode(Payload);
+
+          return { DecodedPayload, FunctionError};
+        }
+
         const command = new InvokeCommand({
           FunctionName: LAMBDA_TARGET,
           InvocationType: 'RequestResponse',
           Payload: params,
         });
 
-        const { Payload, FunctionError } = await lambda.send(command);
-        const result = new TextDecoder().decode(Payload);
+        let lambdaAttempts = 0;
+        let result = await invokeLambdaFunction(command);
 
         // Lambda will return a 200 even if it errors but we can check for the
         // FunctionError property in the response and then interrogate the payload
-        // for details
-        if (FunctionError) {
-          throw new Error(result);
+        // for details. We also give it one attempt at a retry in case e.g.
+        // the initial invocation timed out or had an I/O error
+        if (result.FunctionError && lambdaAttempts < 1) {
+          result = await invokeLambdaFunction(command);
+          lambdaAttempts++;
         }
 
-        console.log(`Completed ${opts.destinations.map(x => x.key).join(', ')}`);
+        if (result.FunctionError) {
+          throw new Error(result.DecodedPayload);
+        }
+
+        // console.log(`Completed ${opts.destinations.map(x => x.key).join(', ')}`);
 
         next(null);
       }, (err) => {
@@ -196,8 +223,6 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
       });
     });
 
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
     next(null);
   } catch(error) {
     throw new Error(error);
@@ -206,10 +231,6 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
 
 const main = async () => {
   console.time('Process time');
-
-  // fetch an auth token and apply to header template
-  const token = await getAuth();
-  LFS_HEADERS.Authorization = token;
 
   // collect files to process
   const files = getImages();
