@@ -6,6 +6,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import fs from 'fs-extra';
 import fetch from 'node-fetch';
 import glob from 'glob';
+import { chunk, zipWith } from 'lodash';
 import mimeTypes from 'mime-types';
 
 type Asset = {
@@ -105,9 +106,12 @@ const processPointer = async (path: string) => {
 }
 
 // take a batch of pointer data, resolve urls, and create onward data for Lambda
-const resolveAndProcess = async (asset: Asset, next: (err?: Error) => void) => {
+const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error) => void) => {
+  console.log(`resolve and process batch ${i+1} for ${assets.length} pointers`);
+
+  const lambdaConcurrency = 1000;
   const data = JSON.parse(JSON.stringify(LFS_TEMPLATE));
-  data.objects = [asset.opts];
+  data.objects = assets.map(x => x.opts);
 
   if (LFS_HEADERS.Authorization === null) {
     throw new Error('No auth token present');
@@ -127,54 +131,70 @@ const resolveAndProcess = async (asset: Asset, next: (err?: Error) => void) => {
     }).then((data: {
       objects: ResolvedFile[]
     }) => {
-      return data.objects[0].actions.download.href;
+      return data.objects.map((x) => x.actions.download.href);
     });
-
-    if (response.indexOf(asset.opts.oid) === -1) {
-      throw new Error(`Mismatch between pointer oid and resolved url for ${asset.fileName}`);
-    };
 
     // stitch resolved pointer URL and original data back together
-    const printDestination = {
-      type: 's3',
-      bucket: MUSE_S3_BUCKET,
-      key: createKey('print', asset.fileName),
-      scale: 1,
-    }
+    const sourceUrls = zipWith(response, assets, (url: string, asset: Asset): InvocationOptions => {
+      if (url.indexOf(asset.opts.oid) === -1) {
+        throw new Error(`Mismatch between pointer oid and resolved url for ${asset.fileName}`);
+      };
 
-    const previewDestination = {
-      type: 's3',
-      bucket: MUSE_S3_BUCKET,
-      key: createKey('preview', asset.fileName),
-      scale: PREVIEW_IMAGE_DPI / PRINT_IMAGE_DPI,
-    }
+      const printDestination = {
+        type: 's3',
+        bucket: MUSE_S3_BUCKET,
+        key: createKey('print', asset.fileName),
+        scale: 1,
+      }
 
-    const opts: InvocationOptions = {
-      source: {
-        url: response,
-      },
-      destinations: [printDestination, previewDestination]
-    }
+      const previewDestination = {
+        type: 's3',
+        bucket: MUSE_S3_BUCKET,
+        key: createKey('preview', asset.fileName),
+        scale: PREVIEW_IMAGE_DPI / PRINT_IMAGE_DPI,
+      }
 
-    const params = new TextEncoder().encode(JSON.stringify(opts));
-
-    const command = new InvokeCommand({
-      FunctionName: LAMBDA_TARGET,
-      InvocationType: 'RequestResponse',
-      Payload: params,
+      return {
+        source: {
+          url,
+        },
+        destinations: [printDestination, previewDestination],
+      }
     });
 
-    const { Payload, FunctionError } = await lambda.send(command);
-    const result = new TextDecoder().decode(Payload);
+    // invoke the lambda processor at max concurrency
+    await new Promise((resolve: any) => {
+      async.eachLimit(sourceUrls, lambdaConcurrency, async (opts: InvocationOptions, next: (err?: Error) => void) => {
+        const params = new TextEncoder().encode(JSON.stringify(opts));
 
-    // Lambda will return a 200 even if it errors but we can check for the
-    // FunctionError property in the response and then interrogate the payload
-    // for details
-    if (FunctionError) {
-      throw new Error(result);
-    }
+        const command = new InvokeCommand({
+          FunctionName: LAMBDA_TARGET,
+          InvocationType: 'RequestResponse',
+          Payload: params,
+        });
 
-    console.log(`Completed ${opts.destinations.map(x => x.key).join(', ')}`)
+        const { Payload, FunctionError } = await lambda.send(command);
+        const result = new TextDecoder().decode(Payload);
+
+        // Lambda will return a 200 even if it errors but we can check for the
+        // FunctionError property in the response and then interrogate the payload
+        // for details
+        if (FunctionError) {
+          throw new Error(result);
+        }
+
+        console.log(`Completed ${opts.destinations.map(x => x.key).join(', ')}`);
+
+        next(null);
+      }, (err) => {
+        if (err) {
+          throw new Error(err.message);
+        }
+
+        console.log(`Completed batch ${i+1} for ${assets.length} pointers`);
+        resolve();
+      });
+    });
 
     next(null);
   } catch(error) {
@@ -192,16 +212,16 @@ const main = async () => {
   // collect files to process
   const files = getImages();
   // chunk size of URLs to resolve in batches via the Github API
-  const resolverConcurrency = 10;
+  const resolverChunkSize = 50;
 
   console.log(`${files.length} files to process`);
 
   try {
     // iterate over LFS pointer files and get source URL from oid
-    const pointerData = await Promise.all(files.map(x => processPointer(x)));
+    const pointerData = await Promise.all(files.map(x => processPointer(x))).then(res => chunk(res, resolverChunkSize));
 
     await new Promise((resolve: any) => {
-      async.eachLimit(pointerData, resolverConcurrency, resolveAndProcess, (err) => {
+      async.eachOfSeries(pointerData, resolveAndProcess, (err) => {
         if (err) {
           throw new Error(err.message);
         }
