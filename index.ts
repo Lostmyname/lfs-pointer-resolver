@@ -46,6 +46,7 @@ const PREVIEW_IMAGE_DPI = parseInt(core.getInput('PREVIEW_IMAGE_DPI'));
 
 const REPOSITORY = core.getInput('REPOSITORY');
 const SOURCE_DIR = core.getInput('SOURCE_DIR');
+const MODIFIED_IMAGES = core.getInput('MODIFIED_IMAGES');
 
 const LFS_ENDPOINT = core.getInput('LFS_DISCOVERY_ENDPOINT')
 const LAMBDA_TARGET = core.getInput('LAMBDA_TARGET');
@@ -233,7 +234,7 @@ const main = async () => {
   console.time('Process time');
 
   // collect files to process
-  const files = getImages();
+  const files = MODIFIED_IMAGES.length !== 0 ? MODIFIED_IMAGES.split(' ').map(x => `./${x}`) : getImages();
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
 

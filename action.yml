@@ -24,6 +24,9 @@ inputs:
     description: 'Project directory where source images are located. Internally the resolver looks within this for an `images` folder'
     required: false
     default: 'static-assets'
+  modified_images:
+    description: A list of the modified images in a given range of commits
+    required: false
   print_image_dpi:
     description: 'Pixel resolution of a print image'
     required: false
