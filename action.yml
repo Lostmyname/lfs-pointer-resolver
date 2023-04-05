@@ -25,7 +25,7 @@ inputs:
     required: false
     default: 'static-assets'
   modified_images:
-    description: A list of the modified images in a given range of commits
+    description: A file name which includes a string with all modified images in a given raange of commits
     required: false
   print_image_dpi:
     description: 'Pixel resolution of a print image'
