@@ -71517,6 +71517,10 @@ let LFS_HEADERS = {
     'Content-Type': 'application/vnd.git-lfs+json',
     'Authorization': null,
 };
+const getModifiedImages = () => __awaiter(void 0, void 0, void 0, function* () {
+    const files = yield lib_default().readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' ').map(x => `./${x}`));
+    return files;
+});
 const getImages = () => {
     return glob_default().sync(`./${SOURCE_DIR}/images/**/*`, { nodir: true })
         .reduce((acc, file) => {
@@ -71656,7 +71660,8 @@ const resolveAndProcess = (assets, i, next) => __awaiter(void 0, void 0, void 0,
 const main = () => __awaiter(void 0, void 0, void 0, function* () {
     console.time('Process time');
     // collect files to process
-    const files = MODIFIED_IMAGES.length !== 0 ? MODIFIED_IMAGES.split(' ').map(x => `./${x}`) : getImages();
+    const modifiedImages = yield getModifiedImages();
+    const files = modifiedImages.length !== 0 ? modifiedImages : getImages();
     // chunk size of URLs to resolve in batches via the Github API
     const resolverChunkSize = 50;
     console.log(`${files.length} files to process`);
