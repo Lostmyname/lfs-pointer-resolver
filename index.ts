@@ -64,8 +64,15 @@ let LFS_HEADERS = {
 };
 
 const getModifiedImages = async (): Promise<string[]> => {
-  const files = await fs.readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' ').map(x => `./${x}`));
-  return files;
+  try {
+    const files = await fs.readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' '));
+    if (files[0] !== '') {
+      return files.map(x => `./${x}`);
+    }
+    return files;
+  } catch(error) {
+    throw new Error(error);
+  }
 }
 
 const getImages = (): string[] => {
@@ -240,7 +247,7 @@ const main = async () => {
 
   // collect files to process
   const modifiedImages = await getModifiedImages();
-  const files = modifiedImages.length !== 0 ? modifiedImages : getImages();
+  const files = modifiedImages[0] !== '' ? modifiedImages : getImages();
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
 

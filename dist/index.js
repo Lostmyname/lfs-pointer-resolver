@@ -71518,8 +71518,16 @@ let LFS_HEADERS = {
     'Authorization': null,
 };
 const getModifiedImages = () => __awaiter(void 0, void 0, void 0, function* () {
-    const files = yield lib_default().readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' ').map(x => `./${x}`));
-    return files;
+    try {
+        const files = yield lib_default().readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' '));
+        if (files[0] !== '') {
+            return files.map(x => `./${x}`);
+        }
+        return files;
+    }
+    catch (error) {
+        throw new Error(error);
+    }
 });
 const getImages = () => {
     return glob_default().sync(`./${SOURCE_DIR}/images/**/*`, { nodir: true })
@@ -71661,7 +71669,7 @@ const main = () => __awaiter(void 0, void 0, void 0, function* () {
     console.time('Process time');
     // collect files to process
     const modifiedImages = yield getModifiedImages();
-    const files = modifiedImages.length !== 0 ? modifiedImages : getImages();
+    const files = modifiedImages[0] !== '' ? modifiedImages : getImages();
     // chunk size of URLs to resolve in batches via the Github API
     const resolverChunkSize = 50;
     console.log(`${files.length} files to process`);
