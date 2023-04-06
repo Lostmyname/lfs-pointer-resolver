@@ -71504,6 +71504,8 @@ const PREVIEW_IMAGE_DPI = parseInt(core.getInput('PREVIEW_IMAGE_DPI'));
 const REPOSITORY = core.getInput('REPOSITORY');
 const SOURCE_DIR = core.getInput('SOURCE_DIR');
 const MODIFIED_IMAGES = core.getInput('MODIFIED_IMAGES');
+const ASSET_VERSION = core.getInput('ASSET_VERSION');
+const ASSET_VERSION_BEFORE = core.getInput('ASSET_VERSION_BEFORE');
 const LFS_ENDPOINT = core.getInput('LFS_DISCOVERY_ENDPOINT');
 const LAMBDA_TARGET = core.getInput('LAMBDA_TARGET');
 const LFS_TEMPLATE = {
@@ -71517,28 +71519,63 @@ let LFS_HEADERS = {
     'Content-Type': 'application/vnd.git-lfs+json',
     'Authorization': null,
 };
+const getS3Folder = () => {
+    const cmd = `aws s3 ls s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION_BEFORE} | head`;
+    return new Promise((resolve) => {
+        (0,external_child_process_.exec)(cmd, (err, stdout, stderr) => {
+            const isEmpty = stdout === '';
+            const stdoutValue = isEmpty ? undefined : stdout;
+            resolve(stdout ? stdoutValue : stderr);
+        });
+    });
+};
+const syncS3Folders = () => __awaiter(void 0, void 0, void 0, function* () {
+    // Copy all images from previous assetVersion folder to the new one
+    console.log('Copying images...');
+    const cmd = `aws s3 sync s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION_BEFORE} s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION} --copy-props none --exclude "*" --include "*preview/*" --include "*print/*"`;
+    return new Promise((resolve) => {
+        (0,external_child_process_.exec)(cmd, (err, stdout, stderr) => {
+            resolve(stdout ? stdout : stderr);
+        });
+    });
+});
 const getModifiedImages = () => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        // returns an array of file names
         const files = yield lib_default().readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' '));
+        // construct array with file paths
         if (files[0] !== '') {
-            return files.map(x => `./${x}`);
+            return files.map(x => `./${x.replace('\n', '')}`);
         }
-        return files;
+        else {
+            return null;
+        }
     }
     catch (error) {
-        throw new Error(error);
+        throw new Error(`Could not get modified images. ${error}`);
     }
 });
-const getImages = () => {
-    return glob_default().sync(`./${SOURCE_DIR}/images/**/*`, { nodir: true })
-        .reduce((acc, file) => {
-        const mt = mime_types.lookup(file) || '';
-        if (mt.startsWith('image/') && !mt.includes('svg')) {
-            acc.push(file);
-        }
-        return acc;
-    }, []);
-};
+const getImages = () => __awaiter(void 0, void 0, void 0, function* () {
+    const modifiedImages = yield getModifiedImages();
+    const s3Folder = yield getS3Folder();
+    // Do a partial build if there are modified files.
+    // If no source s3 folder exists, eg. after a previously failed build, process all images.
+    if (modifiedImages && s3Folder !== '') {
+        console.log(`${modifiedImages.length} modified images to process`);
+        return modifiedImages;
+    }
+    else {
+        console.log('Process all images');
+        return glob_default().sync(`./${SOURCE_DIR}/images/**/*`, { nodir: true })
+            .reduce((acc, file) => {
+            const mt = mime_types.lookup(file) || '';
+            if (mt.startsWith('image/') && !mt.includes('svg')) {
+                acc.push(file);
+            }
+            return acc;
+        }, []);
+    }
+});
 const getAuth = () => {
     const cmd = `ssh git@github.com git-lfs-authenticate ${REPOSITORY} download`; // config
     return new Promise((resolve) => {
@@ -71548,7 +71585,7 @@ const getAuth = () => {
     });
 };
 const createKey = (mode, fileName) => {
-    return `${MUSE_PRODUCT_SLUG}/${mode}/${fileName}`;
+    return `${MUSE_PRODUCT_SLUG}/${ASSET_VERSION}/${mode}/${fileName}`;
 };
 // read an LFS pointer file and parse it's oid and size
 // return with the file name because we need to map this with the resolved url later
@@ -71666,10 +71703,17 @@ const resolveAndProcess = (assets, i, next) => __awaiter(void 0, void 0, void 0,
     }
 });
 const main = () => __awaiter(void 0, void 0, void 0, function* () {
+    const s3Folder = yield getS3Folder();
+    const modifiedImages = yield getModifiedImages();
+    if (s3Folder !== '') {
+        yield syncS3Folders();
+    }
+    else {
+        console.log('Source folder does not exist. Skipping S3 sync');
+    }
     console.time('Process time');
     // collect files to process
-    const modifiedImages = yield getModifiedImages();
-    const files = modifiedImages[0] !== '' ? modifiedImages : getImages();
+    const files = (s3Folder && !modifiedImages) ? [] : yield getImages();
     // chunk size of URLs to resolve in batches via the Github API
     const resolverChunkSize = 50;
     console.log(`${files.length} files to process`);

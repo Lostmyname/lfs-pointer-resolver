@@ -5,7 +5,7 @@ runs:
   main: 'dist/index.js'
 inputs:
   muse_product_slug:
-    description: 'Product slug path to use for image uploads, may include a commit SHA for versioning'
+    description: 'Product slug path to use for image uploads'
     required: true
   aws_s3_bucket:
     description: 'Target bucket for image uploads'
@@ -27,6 +27,12 @@ inputs:
   modified_images:
     description: A file name which includes a string with all modified images in a given raange of commits
     required: false
+  asset_version:
+    description: 'A commit SHA for versioning' 
+    required: true
+  asset_version_before:
+    description: 'A commit SHA to compare with and get the diff'
+    required: true
   print_image_dpi:
     description: 'Pixel resolution of a print image'
     required: false

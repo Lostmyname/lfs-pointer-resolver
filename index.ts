@@ -47,6 +47,8 @@ const PREVIEW_IMAGE_DPI = parseInt(core.getInput('PREVIEW_IMAGE_DPI'));
 const REPOSITORY = core.getInput('REPOSITORY');
 const SOURCE_DIR = core.getInput('SOURCE_DIR');
 const MODIFIED_IMAGES = core.getInput('MODIFIED_IMAGES');
+const ASSET_VERSION = core.getInput('ASSET_VERSION');
+const ASSET_VERSION_BEFORE = core.getInput('ASSET_VERSION_BEFORE');
 
 const LFS_ENDPOINT = core.getInput('LFS_DISCOVERY_ENDPOINT')
 const LAMBDA_TARGET = core.getInput('LAMBDA_TARGET');
@@ -63,30 +65,64 @@ let LFS_HEADERS = {
   'Authorization': null,
 };
 
-const getModifiedImages = async (): Promise<string[] | ''> => {
-  if (!MODIFIED_IMAGES || MODIFIED_IMAGES === '') return '';
+const getS3Folder = (): Promise<string> => {
+  const cmd = `aws s3 ls s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION_BEFORE} | head`;
+  return new Promise((resolve) => {
+    exec(cmd, (err, stdout, stderr) => {
+      const isEmpty = stdout === '';
+      const stdoutValue = isEmpty ? undefined : stdout;
+      resolve(stdout ? stdoutValue : stderr);
+    });
+  });
+}
 
+const syncS3Folders = async (): Promise<string> => {
+  // Copy all images from previous assetVersion folder to the new one
+  console.log('Copying images...');
+  const cmd = `aws s3 sync s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION_BEFORE} s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION} --copy-props none --exclude "*" --include "*preview/*" --include "*print/*"`;
+  return new Promise((resolve) => {
+    exec(cmd, (err, stdout, stderr) => {
+      resolve(stdout ? stdout : stderr);
+    });
+  });
+}
+
+const getModifiedImages = async (): Promise<string[]> => {
   try {
+    // returns an array of file names
     const files = await fs.readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' '));
+    // construct array with file paths
     if (files[0] !== '') {
-      return files.map(x => `./${x}`);
+      return files.map(x => `./${x.replace('\n', '')}`);
+    } else {
+      return null;
     }
-    return files;
   } catch(error) {
-    throw new Error(error);
+    throw new Error(`Could not get modified images. ${error}`);
   }
 }
 
-const getImages = (): string[] => {
-  return glob
-    .sync(`./${SOURCE_DIR}/images/**/*`, {nodir: true})
-    .reduce((acc, file) => {
-      const mt = mimeTypes.lookup(file) || '';
-      if (mt.startsWith('image/') && !mt.includes('svg')) {
-        acc.push(file);
-      }
-      return acc;
-    }, []);
+const getImages = async (): Promise<string[]> => {
+  const modifiedImages = await getModifiedImages();
+  const s3Folder = await getS3Folder();
+
+  // Do a partial build if there are modified files.
+  // If no source s3 folder exists, eg. after a previously failed build, process all images.
+  if (modifiedImages && s3Folder !== '') {
+    console.log(`${modifiedImages.length} modified images to process`);
+    return modifiedImages;
+  } else {
+    console.log('Process all images')
+    return glob
+      .sync(`./${SOURCE_DIR}/images/**/*`, {nodir: true})
+      .reduce((acc, file) => {
+        const mt = mimeTypes.lookup(file) || '';
+        if (mt.startsWith('image/') && !mt.includes('svg')) {
+          acc.push(file);
+        }
+        return acc;
+      }, []);
+  }
 }
 
 const getAuth = (): Promise<string> => {
@@ -99,7 +135,7 @@ const getAuth = (): Promise<string> => {
 }
 
 const createKey = (mode: string, fileName: string) => {
-  return `${MUSE_PRODUCT_SLUG}/${mode}/${fileName}`;
+  return `${MUSE_PRODUCT_SLUG}/${ASSET_VERSION}/${mode}/${fileName}`;
 }
 
 // read an LFS pointer file and parse it's oid and size
@@ -245,11 +281,18 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
 }
 
 const main = async () => {
-  console.time('Process time');
-
-  // collect files to process
+  const s3Folder = await getS3Folder();
   const modifiedImages = await getModifiedImages();
-  const files = modifiedImages !== '' ? modifiedImages : getImages();
+
+  if (s3Folder !== '') {
+    await syncS3Folders();
+  } else {
+    console.log('Source folder does not exist. Skipping S3 sync');
+  }
+
+  console.time('Process time');
+  // collect files to process
+  const files = (s3Folder && !modifiedImages) ? [] : await getImages();
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
 
