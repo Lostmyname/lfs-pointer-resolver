@@ -1,3 +1,6 @@
 node_modules
 
 yarn-error.log
+
+# allow an example of the modified files artifact that should not be committed
+.modified

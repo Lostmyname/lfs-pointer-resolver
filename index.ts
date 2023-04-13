@@ -3,6 +3,7 @@ import { exec } from 'child_process';
 import * as core from '@actions/core';
 import async from 'async';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import fs from 'fs-extra';
 import axios from 'axios';
 import axiosRetry from 'axios-retry';
@@ -38,6 +39,10 @@ const lambda = new LambdaClient({
   region: 'eu-west-1',
 });
 
+const s3 = new S3Client({
+  region: 'eu-west-1',
+});
+
 const MUSE_PRODUCT_SLUG = core.getInput('MUSE_PRODUCT_SLUG');
 const MUSE_S3_BUCKET = core.getInput('AWS_S3_BUCKET');
 
@@ -47,6 +52,7 @@ const PREVIEW_IMAGE_DPI = parseInt(core.getInput('PREVIEW_IMAGE_DPI'));
 const REPOSITORY = core.getInput('REPOSITORY');
 const SOURCE_DIR = core.getInput('SOURCE_DIR');
 const MODIFIED_IMAGES = core.getInput('MODIFIED_IMAGES');
+
 const ASSET_VERSION = core.getInput('ASSET_VERSION');
 const ASSET_VERSION_BEFORE = core.getInput('ASSET_VERSION_BEFORE');
 
@@ -65,21 +71,30 @@ let LFS_HEADERS = {
   'Authorization': null,
 };
 
-const getS3Folder = (): Promise<string> => {
-  const cmd = `aws s3 ls s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION_BEFORE} | head`;
-  return new Promise((resolve) => {
-    exec(cmd, (err, stdout, stderr) => {
-      const isEmpty = stdout === '';
-      const stdoutValue = isEmpty ? undefined : stdout;
-      resolve(stdout ? stdoutValue : stderr);
-    });
+const getS3Folder = async (): Promise<string | null> => {
+  // Due to how S3 works, we can't just check if a folder exists.
+  // Instead check if any objects use the "folder" as a prefix.
+  const folder = `${REPOSITORY}/${ASSET_VERSION_BEFORE}`;
+  const command = new ListObjectsV2Command({
+    Bucket: MUSE_S3_BUCKET,
+    Prefix: folder,
+    MaxKeys: 1,
   });
+
+  try {
+    const response = await s3.send(command);
+    if (response.KeyCount) {
+      return folder;
+    }
+
+    return null;
+
+  } catch (error) {
+    throw new Error(error);
+  }
 }
 
-const syncS3Folders = async (): Promise<string> => {
-  // Copy all images from previous assetVersion folder to the new one
-  console.log('Copying images...');
-  const cmd = `aws s3 sync s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION_BEFORE} s3://${MUSE_S3_BUCKET}/${MUSE_PRODUCT_SLUG}/${ASSET_VERSION} --copy-props none --exclude "*" --include "*preview/*" --include "*print/*"`;
+const copyFolder = async (cmd: string) => {
   return new Promise((resolve) => {
     exec(cmd, (err, stdout, stderr) => {
       resolve(stdout ? stdout : stderr);
@@ -87,28 +102,36 @@ const syncS3Folders = async (): Promise<string> => {
   });
 }
 
-const getModifiedImages = async (): Promise<string[]> => {
+const duplicateLastBuildAssets = async () => {
+  // Copy all images from previous assetVersion folder to the new one
+  // Using a direct cp commands as this functionality is not in the S3 SDK
+  // Using the --quiet flag to suppress output as this is a large operation
+  console.log('Copying images...');
+  const cmd = `aws s3 cp s3://${MUSE_S3_BUCKET}/${REPOSITORY}/${ASSET_VERSION_BEFORE} s3://${MUSE_S3_BUCKET}/${REPOSITORY}/${ASSET_VERSION} --recursive --quiet --exclude "*" --include "*preview/*" --include "*print/*"`;
+
+  return await copyFolder(cmd);
+}
+
+const getModifiedImages = async (): Promise<string[] | null> => {
   try {
-    // returns an array of file names
     const files = await fs.readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' '));
-    // construct array with file paths
-    if (files[0] !== '') {
-      return files.map(x => `./${x.replace('\n', '')}`);
-    } else {
+
+    // no contents, return early
+    if (files.length === 1 && files[0] === '') {
       return null;
     }
+
+    // construct array with file paths
+    return files.map(x => `./${x.replace('\n', '')}`);
   } catch(error) {
     throw new Error(`Could not get modified images. ${error}`);
   }
 }
 
-const getImages = async (): Promise<string[]> => {
-  const modifiedImages = await getModifiedImages();
-  const s3Folder = await getS3Folder();
-
+const getImages = async (s3Folder: string, modifiedImages: string[]): Promise<string[]> => {
   // Do a partial build if there are modified files.
   // If no source s3 folder exists, eg. after a previously failed build, process all images.
-  if (modifiedImages && s3Folder !== '') {
+  if (modifiedImages && s3Folder) {
     console.log(`${modifiedImages.length} modified images to process`);
     return modifiedImages;
   } else {
@@ -281,22 +304,21 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
 }
 
 const main = async () => {
+  console.time('Process time');
+
   const s3Folder = await getS3Folder();
   const modifiedImages = await getModifiedImages();
 
-  if (s3Folder !== '') {
-    await syncS3Folders();
+  if (s3Folder) {
+    await duplicateLastBuildAssets();
   } else {
-    console.log('Source folder does not exist. Skipping S3 sync');
+    console.log('Previous build folder does not exist. Skipping duplication.');
   }
 
-  console.time('Process time');
   // collect files to process
-  const files = (s3Folder && !modifiedImages) ? [] : await getImages();
+  const files = await getImages(s3Folder, modifiedImages);
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
-
-  console.log(`${files.length} files to process`);
 
   try {
     // iterate over LFS pointer files and get source URL from oid
