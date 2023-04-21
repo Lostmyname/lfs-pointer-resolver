@@ -3,12 +3,12 @@ import { exec } from 'child_process';
 import * as core from '@actions/core';
 import async from 'async';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
-import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { S3Client, CopyObjectCommand } from '@aws-sdk/client-s3';
 import fs from 'fs-extra';
 import axios from 'axios';
 import axiosRetry from 'axios-retry';
 import glob from 'glob';
-import { chunk, zipWith } from 'lodash';
+import { chunk, zipWith, flatten, union, uniq } from 'lodash';
 import mimeTypes from 'mime-types';
 
 type Asset = {
@@ -43,7 +43,6 @@ const s3 = new S3Client({
   region: 'eu-west-1',
 });
 
-const MUSE_PRODUCT_SLUG = core.getInput('MUSE_PRODUCT_SLUG');
 const MUSE_S3_BUCKET = core.getInput('AWS_S3_BUCKET');
 
 const PRINT_IMAGE_DPI = parseInt(core.getInput('PRINT_IMAGE_DPI'));
@@ -71,47 +70,6 @@ let LFS_HEADERS = {
   'Authorization': null,
 };
 
-const getS3Folder = async (): Promise<string | null> => {
-  // Due to how S3 works, we can't just check if a folder exists.
-  // Instead check if any objects use the "folder" as a prefix.
-  const folder = `${REPOSITORY}/${ASSET_VERSION_BEFORE}`;
-  const command = new ListObjectsV2Command({
-    Bucket: MUSE_S3_BUCKET,
-    Prefix: folder,
-    MaxKeys: 1,
-  });
-
-  try {
-    const response = await s3.send(command);
-    if (response.KeyCount) {
-      return folder;
-    }
-
-    return null;
-
-  } catch (error) {
-    throw new Error(error);
-  }
-}
-
-const copyFolder = async (cmd: string) => {
-  return new Promise((resolve) => {
-    exec(cmd, (err, stdout, stderr) => {
-      resolve(stdout ? stdout : stderr);
-    });
-  });
-}
-
-const duplicateLastBuildAssets = async () => {
-  // Copy all images from previous assetVersion folder to the new one
-  // Using a direct cp commands as this functionality is not in the S3 SDK
-  // Using the --quiet flag to suppress output as this is a large operation
-  console.log('Copying images...');
-  const cmd = `aws s3 cp s3://${MUSE_S3_BUCKET}/${REPOSITORY}/${ASSET_VERSION_BEFORE} s3://${MUSE_S3_BUCKET}/${REPOSITORY}/${ASSET_VERSION} --recursive --quiet --exclude "*" --include "*preview/*" --include "*print/*"`;
-
-  return await copyFolder(cmd);
-}
-
 const getModifiedImages = async (): Promise<string[] | null> => {
   try {
     const files = await fs.readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' '));
@@ -128,24 +86,16 @@ const getModifiedImages = async (): Promise<string[] | null> => {
   }
 }
 
-const getImages = async (s3Folder: string, modifiedImages: string[]): Promise<string[]> => {
-  // Do a partial build if there are modified files.
-  // If no source s3 folder exists, eg. after a previously failed build, process all images.
-  if (modifiedImages && s3Folder) {
-    console.log(`${modifiedImages.length} modified images to process`);
-    return modifiedImages;
-  } else {
-    console.log('Process all images')
-    return glob
-      .sync(`./${SOURCE_DIR}/images/**/*`, {nodir: true})
-      .reduce((acc, file) => {
-        const mt = mimeTypes.lookup(file) || '';
-        if (mt.startsWith('image/') && !mt.includes('svg')) {
-          acc.push(file);
-        }
-        return acc;
-      }, []);
-  }
+const getImages = async (): Promise<string[]> => {
+  return glob
+    .sync(`../${SOURCE_DIR}/images/**/*`, {nodir: true})
+    .reduce((acc, file) => {
+      const mt = mimeTypes.lookup(file) || '';
+      if (mt.startsWith('image/') && !mt.includes('svg')) {
+        acc.push(file);
+      }
+      return acc;
+    }, []);
 }
 
 const getAuth = (): Promise<string> => {
@@ -158,7 +108,7 @@ const getAuth = (): Promise<string> => {
 }
 
 const createKey = (mode: string, fileName: string) => {
-  return `${MUSE_PRODUCT_SLUG}/${ASSET_VERSION}/${mode}/${fileName}`;
+  return `${REPOSITORY}/${ASSET_VERSION}/${mode}/${fileName}`;
 }
 
 // read an LFS pointer file and parse it's oid and size
@@ -306,23 +256,50 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
 const main = async () => {
   console.time('Process time');
 
-  const s3Folder = await getS3Folder();
   const modifiedImages = await getModifiedImages();
 
-  if (s3Folder) {
-    await duplicateLastBuildAssets();
-  } else {
-    console.log('Previous build folder does not exist. Skipping duplication.');
-  }
-
   // collect files to process
-  const files = await getImages(s3Folder, modifiedImages);
+  const files = await getImages();
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
 
+  console.log(`${files.length} image in product. ${modifiedImages.length} modified files in this commit.`);
+
+  const fileSelection = flatten(files.map(x => {
+    const filename = x.split(`${SOURCE_DIR}/`)[1];
+    return [
+      `${REPOSITORY}/${ASSET_VERSION_BEFORE}/preview/${filename}`,
+      `${REPOSITORY}/${ASSET_VERSION_BEFORE}/print/${filename}`
+    ];
+  }));
+
+  const uncopiedFiles = [];
+
+  await Promise.all(fileSelection.map(async (sourceKey) => {
+    const destKey = sourceKey.replace(ASSET_VERSION_BEFORE, ASSET_VERSION);
+
+    const command = new CopyObjectCommand({
+      Bucket: MUSE_S3_BUCKET,
+      CopySource: `${MUSE_S3_BUCKET}/${sourceKey}`,
+      Key: destKey,
+    });
+
+    try {
+      await s3.send(command);
+    } catch (error) {
+      uncopiedFiles.push(destKey);
+    }
+  }));
+
+  const deduplicatedUncopiedFiles = uniq(uncopiedFiles.map(x => x.split(/preview|print/)[1])).map(x => `./static-assets${x}`);
+
+  const filesToProcess = union(deduplicatedUncopiedFiles, modifiedImages);
+
+  console.log(`${filesToProcess.length} files need processing`);
+
   try {
     // iterate over LFS pointer files and get source URL from oid
-    const pointerData = await Promise.all(files.map(x => processPointer(x))).then(res => chunk(res, resolverChunkSize));
+    const pointerData = await Promise.all(filesToProcess.map(x => processPointer(x))).then(res => chunk(res, resolverChunkSize));
 
     await new Promise((resolve: any) => {
       async.eachOfSeries(pointerData, resolveAndProcess, (err) => {
