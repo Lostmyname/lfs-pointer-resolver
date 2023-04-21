@@ -88,7 +88,7 @@ const getModifiedImages = async (): Promise<string[] | null> => {
 
 const getImages = async (): Promise<string[]> => {
   return glob
-    .sync(`../${SOURCE_DIR}/images/**/*`, {nodir: true})
+    .sync(`./${SOURCE_DIR}/images/**/*`, {nodir: true})
     .reduce((acc, file) => {
       const mt = mimeTypes.lookup(file) || '';
       if (mt.startsWith('image/') && !mt.includes('svg')) {
