@@ -256,15 +256,16 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
 const main = async () => {
   console.time('Process time');
 
+  // collect modified images in this commit
   const modifiedImages = await getModifiedImages();
-
-  // collect files to process
+  // collect files to process, look inside the product's static-assets folder
   const files = await getImages();
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
+  
+  console.log(`${files.length} images in product. ${modifiedImages.length} modified files in this commit.`);
 
-  console.log(`${files.length} image in product. ${modifiedImages.length} modified files in this commit.`);
-
+  // construct file paths for preview/print to match the S3 key
   const fileSelection = flatten(files.map(x => {
     const filename = x.split(`${SOURCE_DIR}/`)[1];
     return [
@@ -275,24 +276,44 @@ const main = async () => {
 
   const uncopiedFiles = [];
 
-  await Promise.all(fileSelection.map(async (sourceKey) => {
-    const destKey = sourceKey.replace(ASSET_VERSION_BEFORE, ASSET_VERSION);
+  const copyAllFiles = async () => {
+    const batches = chunk(fileSelection, resolverChunkSize);
+    
+    while (batches.length) {
+      const batch = batches.shift();
+      await Promise.all(batch.map(async sourceKey => {
+        // construct destination file path
+        const destKey = sourceKey.replace(ASSET_VERSION_BEFORE, ASSET_VERSION);
+        
+        // set up S3 destination
+        const command = new CopyObjectCommand({
+          Bucket: MUSE_S3_BUCKET,
+          CopySource: `${MUSE_S3_BUCKET}/${sourceKey}`,
+          Key: destKey,
+        });
+        
+        try {
+          // check if the files from static-assets exist in S3 source folder
+          // and try to copy matching files
+          console.log(`Copying file ${sourceKey}`);
+          await s3.send(command);
+        } catch (error) {
+          // push non-matching files to a new array to process later
+          if (error.Code === 'NoSuchKey') {
+            uncopiedFiles.push(destKey);
+          } else {
+            throw new Error(error);
+          }
+        }
+      }));
+    };
+  }
 
-    const command = new CopyObjectCommand({
-      Bucket: MUSE_S3_BUCKET,
-      CopySource: `${MUSE_S3_BUCKET}/${sourceKey}`,
-      Key: destKey,
-    });
+  await copyAllFiles()
 
-    try {
-      await s3.send(command);
-    } catch (error) {
-      uncopiedFiles.push(destKey);
-    }
-  }));
-
+  // remove duplicated files
   const deduplicatedUncopiedFiles = uniq(uncopiedFiles.map(x => x.split(/preview|print/)[1])).map(x => `./static-assets${x}`);
-
+  // Files to process are new modified images + previously uncopied files
   const filesToProcess = union(deduplicatedUncopiedFiles, modifiedImages);
 
   console.log(`${filesToProcess.length} files need processing`);
@@ -312,7 +333,7 @@ const main = async () => {
       });
     });
 
-    console.log(`Processed ${files.length} files`);
+    console.log(`Processed ${filesToProcess.length} files`);
 
   } catch(error) {
     core.setFailed(error);
