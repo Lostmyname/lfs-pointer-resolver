@@ -278,6 +278,7 @@ const main = async () => {
 
   const copyAllFiles = async () => {
     const batches = chunk(fileSelection, resolverChunkSize);
+    console.log(`Copying files from ${REPOSITORY}/${ASSET_VERSION_BEFORE}...`);
     
     while (batches.length) {
       const batch = batches.shift();
@@ -295,7 +296,6 @@ const main = async () => {
         try {
           // check if the files from static-assets exist in S3 source folder
           // and try to copy matching files
-          console.log(`Copying file ${sourceKey}`);
           await s3.send(command);
         } catch (error) {
           // push non-matching files to a new array to process later
@@ -313,6 +313,8 @@ const main = async () => {
 
   // remove duplicated files
   const deduplicatedUncopiedFiles = uniq(uncopiedFiles.map(x => x.split(/preview|print/)[1])).map(x => `./static-assets${x}`);
+
+  console.log(`${deduplicatedUncopiedFiles.length} uncopied files to process later`)
   // Files to process are new modified images + previously uncopied files
   const filesToProcess = union(deduplicatedUncopiedFiles, modifiedImages);
 
