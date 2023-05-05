@@ -73,14 +73,15 @@ let LFS_HEADERS = {
 const getModifiedImages = async (): Promise<string[] | null> => {
   try {
     const files = await fs.readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' '));
+    const filtered = files.filter(x => x !== '' && x !== '\n')
 
     // no contents, return early
-    if (files.length === 1 && files[0] === '') {
+    if (filtered.length === 0) {
       return null;
     }
 
     // construct array with file paths
-    return files.map(x => `./${x.replace('\n', '')}`);
+    return filtered.map(x => `./${x.replace('\n', '')}`);
   } catch(error) {
     throw new Error(`Could not get modified images. ${error}`);
   }
