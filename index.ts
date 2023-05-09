@@ -52,8 +52,8 @@ const REPOSITORY = core.getInput('REPOSITORY');
 const SOURCE_DIR = core.getInput('SOURCE_DIR');
 const MODIFIED_IMAGES = core.getInput('MODIFIED_IMAGES');
 
-const ASSET_VERSION = core.getInput('ASSET_VERSION');
-const ASSET_VERSION_BEFORE = core.getInput('ASSET_VERSION_BEFORE');
+const CODE_VERSION = core.getInput('CODE_VERSION');
+const CODE_VERSION_BEFORE = core.getInput('CODE_VERSION_BEFORE');
 
 const LFS_ENDPOINT = core.getInput('LFS_DISCOVERY_ENDPOINT')
 const LAMBDA_TARGET = core.getInput('LAMBDA_TARGET');
@@ -109,7 +109,7 @@ const getAuth = (): Promise<string> => {
 }
 
 const createKey = (mode: string, fileName: string) => {
-  return `${REPOSITORY}/${ASSET_VERSION}/${mode}/${fileName}`;
+  return `${REPOSITORY}/${CODE_VERSION}/${mode}/${fileName}`;
 }
 
 // read an LFS pointer file and parse it's oid and size
@@ -264,14 +264,16 @@ const main = async () => {
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
   
-  console.log(`${files.length} images in product. ${modifiedImages.length} modified files in this commit.`);
+  const modifiedImgsLength = modifiedImages ? modifiedImages.length : 0;
+
+  console.log(`${files.length} images in product. ${modifiedImgsLength} modified files in this commit.`);
 
   // construct file paths for preview/print to match the S3 key
   const fileSelection = flatten(files.map(x => {
     const filename = x.split(`${SOURCE_DIR}/`)[1];
     return [
-      `${REPOSITORY}/${ASSET_VERSION_BEFORE}/preview/${filename}`,
-      `${REPOSITORY}/${ASSET_VERSION_BEFORE}/print/${filename}`
+      `${REPOSITORY}/${CODE_VERSION_BEFORE}/preview/${filename}`,
+      `${REPOSITORY}/${CODE_VERSION_BEFORE}/print/${filename}`
     ];
   }));
 
@@ -279,13 +281,13 @@ const main = async () => {
 
   const copyAllFiles = async () => {
     const batches = chunk(fileSelection, resolverChunkSize);
-    console.log(`Copying files from ${REPOSITORY}/${ASSET_VERSION_BEFORE}...`);
+    console.log(`Copying files from ${REPOSITORY}/${CODE_VERSION_BEFORE}...`);
     
     while (batches.length) {
       const batch = batches.shift();
       await Promise.all(batch.map(async sourceKey => {
         // construct destination file path
-        const destKey = sourceKey.replace(ASSET_VERSION_BEFORE, ASSET_VERSION);
+        const destKey = sourceKey.replace(CODE_VERSION_BEFORE, CODE_VERSION);
         
         // set up S3 destination
         const command = new CopyObjectCommand({
@@ -310,7 +312,13 @@ const main = async () => {
     };
   }
 
-  await copyAllFiles()
+  if (CODE_VERSION !== CODE_VERSION_BEFORE) {
+    await copyAllFiles()
+  }
+
+  if (CODE_VERSION === CODE_VERSION_BEFORE && modifiedImgsLength !== 0) {
+    throw new Error('Could not copy files. Source folder and destination folder are the same.');
+  }
 
   // remove duplicated files
   const deduplicatedUncopiedFiles = uniq(uncopiedFiles.map(x => x.split(/preview|print/)[1])).map(x => `./static-assets${x}`);

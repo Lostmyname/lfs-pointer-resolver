@@ -27,10 +27,10 @@ inputs:
   modified_images:
     description: A file name which includes a string with all modified images in a given raange of commits
     required: false
-  asset_version:
+  code_version:
     description: 'A commit SHA for versioning' 
     required: true
-  asset_version_before:
+  code_version_before:
     description: 'A commit SHA to compare with and get the diff'
     required: true
   print_image_dpi:
