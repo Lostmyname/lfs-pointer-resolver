@@ -3,11 +3,12 @@ import { exec } from 'child_process';
 import * as core from '@actions/core';
 import async from 'async';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { S3Client, CopyObjectCommand } from '@aws-sdk/client-s3';
 import fs from 'fs-extra';
 import axios from 'axios';
 import axiosRetry from 'axios-retry';
 import glob from 'glob';
-import { chunk, zipWith } from 'lodash';
+import { chunk, zipWith, flatten, union, uniq } from 'lodash';
 import mimeTypes from 'mime-types';
 
 type Asset = {
@@ -38,7 +39,10 @@ const lambda = new LambdaClient({
   region: 'eu-west-1',
 });
 
-const MUSE_PRODUCT_SLUG = core.getInput('MUSE_PRODUCT_SLUG');
+const s3 = new S3Client({
+  region: 'eu-west-1',
+});
+
 const MUSE_S3_BUCKET = core.getInput('AWS_S3_BUCKET');
 
 const PRINT_IMAGE_DPI = parseInt(core.getInput('PRINT_IMAGE_DPI'));
@@ -46,6 +50,10 @@ const PREVIEW_IMAGE_DPI = parseInt(core.getInput('PREVIEW_IMAGE_DPI'));
 
 const REPOSITORY = core.getInput('REPOSITORY');
 const SOURCE_DIR = core.getInput('SOURCE_DIR');
+const MODIFIED_IMAGES = core.getInput('MODIFIED_IMAGES');
+
+const CODE_VERSION = core.getInput('CODE_VERSION');
+const CODE_VERSION_BEFORE = core.getInput('CODE_VERSION_BEFORE');
 
 const LFS_ENDPOINT = core.getInput('LFS_DISCOVERY_ENDPOINT')
 const LAMBDA_TARGET = core.getInput('LAMBDA_TARGET');
@@ -62,7 +70,24 @@ let LFS_HEADERS = {
   'Authorization': null,
 };
 
-const getImages = (): string[] => {
+const getModifiedImages = async (): Promise<string[] | null> => {
+  try {
+    const files = await fs.readFile(`./${MODIFIED_IMAGES}`, 'utf8').then(body => body.split(' '));
+    const filtered = files.filter(x => x !== '' && x !== '\n')
+
+    // no contents, return early
+    if (filtered.length === 0) {
+      return null;
+    }
+
+    // construct array with file paths
+    return filtered.map(x => `./${x.replace('\n', '')}`);
+  } catch(error) {
+    throw new Error(`Could not get modified images. ${error}`);
+  }
+}
+
+const getImages = async (): Promise<string[]> => {
   return glob
     .sync(`./${SOURCE_DIR}/images/**/*`, {nodir: true})
     .reduce((acc, file) => {
@@ -84,7 +109,7 @@ const getAuth = (): Promise<string> => {
 }
 
 const createKey = (mode: string, fileName: string) => {
-  return `${MUSE_PRODUCT_SLUG}/${mode}/${fileName}`;
+  return `${REPOSITORY}/${CODE_VERSION}/${mode}/${fileName}`;
 }
 
 // read an LFS pointer file and parse it's oid and size
@@ -232,16 +257,87 @@ const resolveAndProcess = async (assets: Asset[], i: number, next: (err?: Error)
 const main = async () => {
   console.time('Process time');
 
-  // collect files to process
-  const files = getImages();
+  // collect modified images in this commit
+  const modifiedImages = await getModifiedImages();
+  // collect files to process, look inside the product's static-assets folder
+  const files = await getImages();
   // chunk size of URLs to resolve in batches via the Github API
   const resolverChunkSize = 50;
+  
+  const modifiedImgsLength = modifiedImages ? modifiedImages.length : 0;
 
-  console.log(`${files.length} files to process`);
+  console.log(`${files.length} images in product. ${modifiedImgsLength} modified files in this commit.`);
+
+  // construct file paths for preview/print to match the S3 key
+  const fileSelection = flatten(files.map(x => {
+    const filename = x.split(`${SOURCE_DIR}/`)[1];
+    const isValidCharacter = encodeURI(`${filename}`) === `${filename}`;
+
+    if (!isValidCharacter) {
+      throw new Error(`Invalid character in filename: ${filename}`);
+    }
+
+    return [
+      `${REPOSITORY}/${CODE_VERSION_BEFORE}/preview/${filename}`,
+      `${REPOSITORY}/${CODE_VERSION_BEFORE}/print/${filename}`
+    ];
+  }));
+
+  const uncopiedFiles = [];
+
+  const copyAllFiles = async () => {
+    const batches = chunk(fileSelection, resolverChunkSize);
+    console.log(`Copying files from ${REPOSITORY}/${CODE_VERSION_BEFORE}...`);
+    
+    while (batches.length) {
+      const batch = batches.shift();
+      await Promise.all(batch.map(async sourceKey => {
+        // construct destination file path
+        const destKey = sourceKey.replace(CODE_VERSION_BEFORE, CODE_VERSION);
+        
+        // set up S3 destination
+        const command = new CopyObjectCommand({
+          Bucket: MUSE_S3_BUCKET,
+          CopySource: `${MUSE_S3_BUCKET}/${sourceKey}`,
+          Key: destKey,
+        });
+        
+        try {
+          // check if the files from static-assets exist in S3 source folder
+          // and try to copy matching files
+          await s3.send(command);
+        } catch (error) {
+          // push non-matching files to a new array to process later
+          if (error.Code === 'NoSuchKey') {
+            uncopiedFiles.push(destKey);
+          } else {
+            throw new Error(error);
+          }
+        }
+      }));
+    };
+  }
+
+  if (CODE_VERSION !== CODE_VERSION_BEFORE) {
+    await copyAllFiles()
+  }
+
+  if (CODE_VERSION === CODE_VERSION_BEFORE && modifiedImgsLength !== 0) {
+    throw new Error('Could not copy files. Source folder and destination folder are the same.');
+  }
+
+  // remove duplicated files
+  const deduplicatedUncopiedFiles = uniq(uncopiedFiles.map(x => x.split(/preview|print/)[1])).map(x => `./static-assets${x}`);
+
+  console.log(`${deduplicatedUncopiedFiles.length} uncopied files to process later`)
+  // Files to process are new modified images + previously uncopied files
+  const filesToProcess = union(deduplicatedUncopiedFiles, modifiedImages);
+
+  console.log(`${filesToProcess.length} files need processing`);
 
   try {
     // iterate over LFS pointer files and get source URL from oid
-    const pointerData = await Promise.all(files.map(x => processPointer(x))).then(res => chunk(res, resolverChunkSize));
+    const pointerData = await Promise.all(filesToProcess.map(x => processPointer(x))).then(res => chunk(res, resolverChunkSize));
 
     await new Promise((resolve: any) => {
       async.eachOfSeries(pointerData, resolveAndProcess, (err) => {
@@ -254,7 +350,7 @@ const main = async () => {
       });
     });
 
-    console.log(`Processed ${files.length} files`);
+    console.log(`Processed ${filesToProcess.length} files`);
 
   } catch(error) {
     core.setFailed(error);
