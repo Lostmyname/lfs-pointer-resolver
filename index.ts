@@ -271,6 +271,12 @@ const main = async () => {
   // construct file paths for preview/print to match the S3 key
   const fileSelection = flatten(files.map(x => {
     const filename = x.split(`${SOURCE_DIR}/`)[1];
+    const isValidCharacter = encodeURI(`${filename}`) === `${filename}`;
+
+    if (!isValidCharacter) {
+      throw new Error(`Invalid character in filename: ${filename}`);
+    }
+
     return [
       `${REPOSITORY}/${CODE_VERSION_BEFORE}/preview/${filename}`,
       `${REPOSITORY}/${CODE_VERSION_BEFORE}/print/${filename}`
